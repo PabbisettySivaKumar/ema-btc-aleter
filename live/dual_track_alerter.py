@@ -39,8 +39,11 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from alerts.notifier import send_telegram
 
 SYMBOL = "BTCUSDT"
-BINANCE_KLINES_URL = "https://api.binance.com/api/v3/klines"
-BINANCE_TICKER_URL = "https://api.binance.com/api/v3/ticker/price"
+# Use binance.us because GitHub Actions runners are on US IPs and
+# binance.com returns HTTP 451 (geo-restricted) from those. binance.us
+# serves the same symbols with prices that track binance.com within ~0.05%.
+BINANCE_KLINES_URL = "https://api.binance.us/api/v3/klines"
+BINANCE_TICKER_URL = "https://api.binance.us/api/v3/ticker/price"
 
 
 def fetch_ticker_price(symbol: str) -> float:
