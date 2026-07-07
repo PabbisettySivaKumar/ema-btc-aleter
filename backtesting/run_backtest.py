@@ -2,11 +2,9 @@
 Main entry point: loads OHLCV data, computes indicators, runs the backtest,
 prints a performance report, and saves an equity curve chart.
 
-Usage (with real data, after running data/fetch_binance_data.py):
-    python backtesting/run_backtest.py --csv data/historical_BTCUSDT_15m.csv
-
-Usage (with bundled synthetic sample data, just to sanity-check the code):
-    python backtesting/run_backtest.py --csv data/sample_ohlcv_15m.csv --sample
+Usage:
+    python data/fetch_binance_data.py --symbol BTCUSDT --interval 15m --days 180
+    python backtesting/run_backtest.py --csv historical_BTCUSDT_15m.csv
 """
 
 import argparse
@@ -33,12 +31,10 @@ def load_data(csv_path: str) -> pd.DataFrame:
     return df
 
 
-def print_report(summary: dict, sample_warning: bool):
+def print_report(summary: dict):
     print("\n" + "=" * 50)
     print("BACKTEST RESULTS")
     print("=" * 50)
-    if sample_warning:
-        print("!! Ran on SYNTHETIC sample data - NOT a real performance estimate !!\n")
     print(f"Trades taken:        {summary['num_trades']}")
     print(f"Win rate:            {summary['win_rate_pct']:.1f}%")
     print(f"Profit factor:       {summary['profit_factor']:.2f}")
@@ -84,7 +80,6 @@ def save_trade_log(summary: dict, out_path: str):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--csv", required=True, help="Path to OHLCV CSV file")
-    parser.add_argument("--sample", action="store_true", help="Flag that this is synthetic sample data")
     parser.add_argument("--out-dir", default=".")
     args = parser.parse_args()
 
@@ -99,7 +94,7 @@ def main():
     engine = BacktestEngine(cfg)
     summary = engine.run(df)
 
-    print_report(summary, sample_warning=args.sample)
+    print_report(summary)
     save_equity_curve(summary, os.path.join(args.out_dir, "equity_curve.png"))
     save_trade_log(summary, os.path.join(args.out_dir, "trade_log.csv"))
 

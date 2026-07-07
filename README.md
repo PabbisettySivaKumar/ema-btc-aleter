@@ -7,12 +7,6 @@ pullback entry, weighted scoring (≥80 to trade), and the stated risk rules
 trailing).
 
 ## ⚠️ Read this first
-- This sandbox that built the code has **no internet access**, so it could
-  not download real Binance history. The code was tested end-to-end on
-  **synthetic sample data** (`data/sample_ohlcv_15m.csv`) purely to confirm
-  it runs correctly — those numbers mean nothing about real profitability.
-- To get a real answer, run `fetch_binance_data.py` on your own machine
-  (steps below), then run the backtest on that real CSV.
 - A few strategy rules were ambiguous in the source doc and required
   documented assumptions (see `config/config.py` comments): VWAP reset
   period, exact "resistance filter" definition, and entry timing (next-bar
@@ -48,7 +42,7 @@ a strategy that only works on one coin/period is likely overfit.
 ## Project structure
 ```
 config/         strategy parameters (weights, thresholds, risk %)
-data/           data fetching (Binance) + synthetic sample generator
+data/           data fetching (Binance)
 indicators/     EMA, VWAP, RSI, Volume SMA, ATR
 strategy/       signal logic, swing detection, scoring
 backtesting/    backtest engine + main runner script
