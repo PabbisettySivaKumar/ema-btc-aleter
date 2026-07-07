@@ -1,0 +1,51 @@
+name: dual-track-alerter
+
+on:
+  schedule:
+    # every 15 minutes. Note: GitHub Actions cron can be delayed by
+    # several minutes during peak load — this is fine for alerts-only.
+    - cron: "*/15 * * * *"
+  workflow_dispatch:   # allow manual trigger from the Actions tab
+
+concurrency:
+  group: alerter
+  cancel-in-progress: false
+
+jobs:
+  poll:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # needed to commit updated state files back
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pandas numpy requests python-dotenv
+
+      - name: Run alerter (one cycle)
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID:   ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python live/dual_track_alerter.py --once
+
+      - name: Commit updated state
+        run: |
+          git config user.name  "alerter-bot"
+          git config user.email "alerter-bot@users.noreply.github.com"
+          git add live/state_track_a.json live/state_track_b.json 2>/dev/null || true
+          if ! git diff --staged --quiet; then
+            git commit -m "state: $(date -u +%Y-%m-%dT%H:%MZ) [skip ci]"
+            git push
+          else
+            echo "No state changes to commit."
+          fi
