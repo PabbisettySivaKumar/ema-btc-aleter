@@ -1,4 +1,4 @@
-name: dual-track-alerter
+name: price-alerter
 
 on:
   schedule:
@@ -14,8 +14,6 @@ concurrency:
 jobs:
   poll:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write   # needed to commit updated state files back
 
     steps:
       - name: Checkout
@@ -33,20 +31,8 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Run alerter (one cycle)
+      - name: Run price alerter (one cycle)
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID:   ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: python live/dual_track_alerter.py --once
-
-      - name: Commit updated state
-        run: |
-          git config user.name  "alerter-bot"
-          git config user.email "alerter-bot@users.noreply.github.com"
-          git add live/state_track_a.json live/state_track_b.json 2>/dev/null || true
-          if ! git diff --staged --quiet; then
-            git commit -m "state: $(date -u +%Y-%m-%dT%H:%MZ) [skip ci]"
-            git push
-          else
-            echo "No state changes to commit."
-          fi
+        run: python live/price_alert.py --once
