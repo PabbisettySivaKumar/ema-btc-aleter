@@ -13,6 +13,8 @@ concurrency:
 jobs:
   poll:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write   # allow committing the buy&hold anchor back (first run only)
 
     steps:
       - name: Checkout
@@ -35,3 +37,13 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID:   ${{ secrets.TELEGRAM_CHAT_ID }}
         run: python live/price_alert.py --once
+
+      - name: Persist buy&hold anchor (first run only)
+        run: |
+          if [ -n "$(git status --porcelain -- live/hodl_state.json)" ]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add live/hodl_state.json
+            git commit -m "state: buy&hold anchor [skip ci]"
+            git push origin HEAD:main
+          fi

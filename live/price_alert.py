@@ -20,6 +20,7 @@ Run continuously (VPS / your machine), pinging aligned to :00/:15/:30/:45:
 """
 
 import argparse
+import json
 import os
 import sys
 import time
@@ -43,6 +44,14 @@ EMA_SLOW = 21
 
 POLL_INTERVAL_SECONDS = 15 * 60   # 15 minutes
 POLL_ALIGN_OFFSET_SECONDS = 5     # a few seconds after the :00/:15/:30/:45 mark
+
+# --- Buy & hold tracker ---
+# $1,000 hypothetically put into BTC at the FIRST alert after this went live,
+# then marked-to-market on every alert. Purely informational (a benchmark to
+# compare the crossover signal against — buy & hold has historically beaten it).
+HODL_INVESTMENT_USD = 1000.0
+BINANCE_FEE_PCT = 0.1     # Binance India spot fee — charged on BOTH the buy and the sell
+HODL_STATE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hodl_state.json")
 
 
 def fetch_price_stats(symbol: str) -> dict:
@@ -129,7 +138,62 @@ def build_signal_section(signal: dict) -> str:
     )
 
 
-def build_message(stats: dict, candle: dict, signal: dict) -> str:
+def load_or_init_hodl(current_price: float):
+    """Fixed buy&hold anchor: read it, or create it on the FIRST alert.
+    Returns (state_dict, just_created). When just_created, the workflow commits
+    the state file back so the entry survives future (ephemeral) runs."""
+    if os.path.exists(HODL_STATE_PATH):
+        try:
+            with open(HODL_STATE_PATH) as f:
+                st = json.load(f)
+            if st.get("entry_price"):
+                return st, False
+        except (json.JSONDecodeError, OSError, ValueError):
+            pass  # missing/corrupt -> re-initialize below
+    now = datetime.now(tz=IST)
+    st = {
+        "entry_price": current_price,
+        "entry_time_ist": now.strftime("%Y-%m-%d %H:%M IST"),
+        "investment_usd": HODL_INVESTMENT_USD,
+    }
+    try:
+        with open(HODL_STATE_PATH, "w") as f:
+            json.dump(st, f, indent=2)
+    except OSError as e:
+        print(f"warning: could not write hodl state: {e}")
+    return st, True
+
+
+def build_hodl_section(st: dict, current_price: float, just_created: bool) -> str:
+    invest = st["investment_usd"]
+    entry = st["entry_price"]
+    btc = invest / entry                       # gross BTC bought (fees shown separately)
+    if just_created:
+        return (
+            f"💼 Buy & hold ${invest:,.0f} — tracking starts now\n"
+            f"  Bought {btc:.6f} BTC @ ${entry:,.2f}\n"
+            f"  P/L will show from the next alert onward."
+        )
+    value = btc * current_price                # gross current value
+    gross_pl = value - invest
+    gross_pct = (current_price / entry - 1) * 100
+    buy_fee = invest * BINANCE_FEE_PCT / 100
+    sell_fee = value * BINANCE_FEE_PCT / 100
+    fees = buy_fee + sell_fee
+    net_pl = gross_pl - fees
+    net_pct = net_pl / invest * 100
+    arrow = "🟢" if gross_pl >= 0 else "🔴"
+    return (
+        f"💼 Buy & hold ${invest:,.0f} (from {st['entry_time_ist']})\n"
+        f"  {btc:.6f} BTC @ ${entry:,.2f} → now ${current_price:,.2f}\n"
+        f"  Value: ${value:,.2f}\n"
+        f"  Gross P/L: {arrow} {gross_pct:+.2f}% (${gross_pl:+,.2f})\n"
+        f"  Binance fees (0.1% buy + 0.1% sell): -${fees:,.2f}\n"
+        f"  Net if sold now: ${net_pl:+,.2f} ({net_pct:+.2f}%)"
+    )
+
+
+def build_message(stats: dict, candle: dict, signal: dict, hodl: dict, hodl_new: bool) -> str:
     now = datetime.now(tz=IST).strftime("%Y-%m-%d %H:%M IST")
     arrow_24h = "🟢" if stats["change_pct"] >= 0 else "🔴"
     arrow_15m = "🟢" if candle["change_pct"] >= 0 else "🔴"
@@ -152,6 +216,8 @@ def build_message(stats: dict, candle: dict, signal: dict) -> str:
         f"\n"
         f"{build_signal_section(signal)}\n"
         f"\n"
+        f"{build_hodl_section(hodl, stats['price'], hodl_new)}\n"
+        f"\n"
         f"As of {now}"
     )
 
@@ -161,7 +227,8 @@ def send_one():
     closed = fetch_15m_klines(SYMBOL)
     candle = candle_detail(closed)
     signal = ema_signal(closed)
-    msg = build_message(stats, candle, signal)
+    hodl, hodl_new = load_or_init_hodl(stats["price"])
+    msg = build_message(stats, candle, signal, hodl, hodl_new)
     print(msg)
     send_telegram(msg)
 
