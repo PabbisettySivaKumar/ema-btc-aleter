@@ -1,11 +1,10 @@
 name: price-alerter
 
 on:
-  schedule:
-    # every 15 minutes. Note: GitHub Actions cron can be delayed by
-    # several minutes during peak load — this is fine for alerts-only.
-    - cron: "*/15 * * * *"
-  workflow_dispatch:   # allow manual trigger from the Actions tab
+  # Triggered every 15 min by an external cron-job.org POST to GitHub's
+  # workflow-dispatch API. GitHub's own `schedule` cron was unreliable — it
+  # throttled/dropped ~80% of runs — so we drive the cadence externally.
+  workflow_dispatch:   # manual trigger + external cron-job.org trigger
 
 concurrency:
   group: alerter
