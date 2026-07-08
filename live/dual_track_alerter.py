@@ -39,11 +39,13 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from alerts.notifier import send_telegram
 
 SYMBOL = "BTCUSDT"
-# Use binance.us because GitHub Actions runners are on US IPs and
-# binance.com returns HTTP 451 (geo-restricted) from those. binance.us
-# serves the same symbols with prices that track binance.com within ~0.05%.
-BINANCE_KLINES_URL = "https://api.binance.us/api/v3/klines"
-BINANCE_TICKER_URL = "https://api.binance.us/api/v3/ticker/price"
+# Use data-api.binance.vision: Binance's public market-data mirror. It serves
+# the GLOBAL binance.com order book (prices match .com to the cent), and unlike
+# api.binance.com it is a read-only data host that is NOT geo-blocked, so it
+# works from GitHub Actions US runners (which get HTTP 451 from api.binance.com).
+# This avoids the ~0.02-0.3% basis of api.binance.us, a separate US exchange.
+BINANCE_KLINES_URL = "https://data-api.binance.vision/api/v3/klines"
+BINANCE_TICKER_URL = "https://data-api.binance.vision/api/v3/ticker/price"
 
 
 def fetch_ticker_price(symbol: str) -> float:
