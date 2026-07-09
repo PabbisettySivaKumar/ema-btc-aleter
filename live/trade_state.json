@@ -1,0 +1,14 @@
+{
+  "started_ist": "2026-07-09 13:50 IST",
+  "balance": 1000.0,
+  "in_position": false,
+  "entry_price": null,
+  "entry_time_ist": null,
+  "btc": 0.0,
+  "cost_basis": 0.0,
+  "last_crossover_ts": 1783572300000,
+  "num_trades": 0,
+  "wins": 0,
+  "last_trade_pct": null,
+  "last_exit_ist": null
+}
