@@ -45,13 +45,14 @@ EMA_SLOW = 21
 POLL_INTERVAL_SECONDS = 15 * 60   # 15 minutes
 POLL_ALIGN_OFFSET_SECONDS = 5     # a few seconds after the :00/:15/:30/:45 mark
 
-# --- Buy & hold tracker ---
-# $1,000 hypothetically put into BTC at the FIRST alert after this went live,
-# then marked-to-market on every alert. Purely informational (a benchmark to
-# compare the crossover signal against — buy & hold has historically beaten it).
-HODL_INVESTMENT_USD = 1000.0
+# --- Signal portfolio tracker (informational, compounding) ---
+# A hypothetical $1,000 that BUYS on each bullish EMA9/21 crossover and SELLS on
+# the next bearish one, compounding the proceeds into the next trade. Marked to
+# market on every alert. NOTE: backtests show this round-trip loses on 15m — it's
+# here to visualize what the signal does, not a strategy to fund.
+START_CAPITAL_USD = 1000.0
 BINANCE_FEE_PCT = 0.1     # Binance India spot fee — charged on BOTH the buy and the sell
-HODL_STATE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hodl_state.json")
+TRADE_STATE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "trade_state.json")
 
 
 def fetch_price_stats(symbol: str) -> dict:
@@ -138,62 +139,128 @@ def build_signal_section(signal: dict) -> str:
     )
 
 
-def load_or_init_hodl(current_price: float):
-    """Fixed buy&hold anchor: read it, or create it on the FIRST alert.
-    Returns (state_dict, just_created). When just_created, the workflow commits
-    the state file back so the entry survives future (ephemeral) runs."""
-    if os.path.exists(HODL_STATE_PATH):
+def find_crossovers(closed: list) -> list:
+    """Every EMA9/21 crossover in the closed candles, chronological. Each item:
+    {ts, price, direction, time_ist}. ts = candle open_time (ms); the signal
+    fires on the candle CLOSE, so `price` is that candle's close."""
+    closes = pd.Series([float(r[4]) for r in closed])
+    ef = closes.ewm(span=EMA_FAST, adjust=False).mean()
+    es = closes.ewm(span=EMA_SLOW, adjust=False).mean()
+    fast_above = ef > es
+    out = []
+    for i in range(1, len(closed)):
+        if fast_above.iloc[i] and not fast_above.iloc[i - 1]:
+            direction = "bullish"
+        elif not fast_above.iloc[i] and fast_above.iloc[i - 1]:
+            direction = "bearish"
+        else:
+            continue
+        ts = int(closed[i][0])
+        close_ist = datetime.fromtimestamp(ts / 1000, tz=IST) + timedelta(minutes=15)
+        out.append({"ts": ts, "price": float(closed[i][4]), "direction": direction,
+                    "time_ist": close_ist.strftime("%d %b %H:%M IST")})
+    return out
+
+
+def load_or_init_trade_state(crossovers: list):
+    """Read the compounding signal-portfolio state, or start it fresh with
+    $1,000 in cash. On init, all currently-visible crossovers are marked as
+    already-seen so trading only begins on the NEXT crossover.
+    Returns (state, is_new)."""
+    if os.path.exists(TRADE_STATE_PATH):
         try:
-            with open(HODL_STATE_PATH) as f:
+            with open(TRADE_STATE_PATH) as f:
                 st = json.load(f)
-            if st.get("entry_price"):
+            if "balance" in st:
                 return st, False
         except (json.JSONDecodeError, OSError, ValueError):
             pass  # missing/corrupt -> re-initialize below
     now = datetime.now(tz=IST)
     st = {
-        "entry_price": current_price,
-        "entry_time_ist": now.strftime("%Y-%m-%d %H:%M IST"),
-        "investment_usd": HODL_INVESTMENT_USD,
+        "started_ist": now.strftime("%Y-%m-%d %H:%M IST"),
+        "balance": START_CAPITAL_USD,      # cash on hand when flat
+        "in_position": False,
+        "entry_price": None,
+        "entry_time_ist": None,
+        "btc": 0.0,
+        "cost_basis": 0.0,                 # $ put into the current open trade
+        "last_crossover_ts": crossovers[-1]["ts"] if crossovers else 0,
+        "num_trades": 0,
+        "wins": 0,
+        "last_trade_pct": None,
+        "last_exit_ist": None,
     }
-    try:
-        with open(HODL_STATE_PATH, "w") as f:
-            json.dump(st, f, indent=2)
-    except OSError as e:
-        print(f"warning: could not write hodl state: {e}")
     return st, True
 
 
-def build_hodl_section(st: dict, current_price: float, just_created: bool) -> str:
-    invest = st["investment_usd"]
-    entry = st["entry_price"]
-    btc = invest / entry                       # gross BTC bought (fees shown separately)
-    if just_created:
-        return (
-            f"💼 Buy & hold ${invest:,.0f} — tracking starts now\n"
-            f"  Bought {btc:.6f} BTC @ ${entry:,.2f}\n"
-            f"  P/L will show from the next alert onward."
+def process_crossovers(st: dict, crossovers: list) -> bool:
+    """Apply any crossovers newer than last_crossover_ts: buy on bullish (when
+    flat), sell on bearish (when in a position), compounding proceeds. Binance
+    fees taken on both sides. Returns True if the state changed."""
+    fee = BINANCE_FEE_PCT / 100
+    changed = False
+    for x in crossovers:
+        if x["ts"] <= st["last_crossover_ts"]:
+            continue
+        if x["direction"] == "bullish" and not st["in_position"]:
+            capital = st["balance"]
+            st.update(in_position=True, entry_price=x["price"],
+                      btc=capital * (1 - fee) / x["price"],   # buy fee reduces BTC received
+                      cost_basis=capital, entry_time_ist=x["time_ist"])
+        elif x["direction"] == "bearish" and st["in_position"]:
+            proceeds = st["btc"] * x["price"] * (1 - fee)     # sell fee
+            st.update(in_position=False, balance=proceeds,
+                      num_trades=st["num_trades"] + 1,
+                      wins=st["wins"] + (1 if proceeds > st["cost_basis"] else 0),
+                      last_trade_pct=(proceeds / st["cost_basis"] - 1) * 100,
+                      last_exit_ist=x["time_ist"],
+                      entry_price=None, btc=0.0, cost_basis=0.0, entry_time_ist=None)
+        st["last_crossover_ts"] = x["ts"]
+        changed = True
+    return changed
+
+
+def save_trade_state(st: dict):
+    try:
+        with open(TRADE_STATE_PATH, "w") as f:
+            json.dump(st, f, indent=2)
+    except OSError as e:
+        print(f"warning: could not write trade state: {e}")
+
+
+def build_trade_section(st: dict, current_price: float) -> str:
+    start = START_CAPITAL_USD
+    if st["in_position"]:
+        net_now = st["btc"] * current_price * (1 - BINANCE_FEE_PCT / 100)  # value if sold now
+        unreal_abs = net_now - st["cost_basis"]
+        unreal_pct = (net_now / st["cost_basis"] - 1) * 100
+        arrow = "🟢" if unreal_abs >= 0 else "🔴"
+        head = f"💼 Signal portfolio: ${net_now:,.2f} ({(net_now/start-1)*100:+.2f}% since {st['started_ist']})"
+        body = (
+            f"  📈 In a trade — bought on bull cross {st['entry_time_ist']}\n"
+            f"  {st['btc']:.6f} BTC @ ${st['entry_price']:,.2f} (cost ${st['cost_basis']:,.2f})\n"
+            f"  Now ${current_price:,.2f} → worth ${net_now:,.2f} net of fees\n"
+            f"  Unrealized: {arrow} {unreal_pct:+.2f}% (${unreal_abs:+,.2f})"
         )
-    value = btc * current_price                # gross current value
-    gross_pl = value - invest
-    gross_pct = (current_price / entry - 1) * 100
-    buy_fee = invest * BINANCE_FEE_PCT / 100
-    sell_fee = value * BINANCE_FEE_PCT / 100
-    fees = buy_fee + sell_fee
-    net_pl = gross_pl - fees
-    net_pct = net_pl / invest * 100
-    arrow = "🟢" if gross_pl >= 0 else "🔴"
-    return (
-        f"💼 Buy & hold ${invest:,.0f} (from {st['entry_time_ist']})\n"
-        f"  {btc:.6f} BTC @ ${entry:,.2f} → now ${current_price:,.2f}\n"
-        f"  Value: ${value:,.2f}\n"
-        f"  Gross P/L: {arrow} {gross_pct:+.2f}% (${gross_pl:+,.2f})\n"
-        f"  Binance fees (0.1% buy + 0.1% sell): -${fees:,.2f}\n"
-        f"  Net if sold now: ${net_pl:+,.2f} ({net_pct:+.2f}%)"
-    )
+    else:
+        bal = st["balance"]
+        head = f"💼 Signal portfolio: ${bal:,.2f} ({(bal/start-1)*100:+.2f}% since {st['started_ist']})"
+        if st["num_trades"] == 0:
+            body = "  💵 In cash — waiting for the first bullish crossover to buy."
+        else:
+            la = "🟢" if (st["last_trade_pct"] or 0) >= 0 else "🔴"
+            body = (
+                f"  💵 In cash since {st['last_exit_ist']} (sold on bear cross)\n"
+                f"  Last trade: {la} {st['last_trade_pct']:+.2f}% net\n"
+                f"  Waiting for next bullish crossover."
+            )
+    tail = f"  Trades closed: {st['num_trades']}"
+    if st["num_trades"]:
+        tail += f" (wins {st['wins']}/{st['num_trades']})"
+    return f"{head}\n{body}\n{tail}"
 
 
-def build_message(stats: dict, candle: dict, signal: dict, hodl: dict, hodl_new: bool) -> str:
+def build_message(stats: dict, candle: dict, signal: dict, trade_state: dict) -> str:
     now = datetime.now(tz=IST).strftime("%Y-%m-%d %H:%M IST")
     arrow_24h = "🟢" if stats["change_pct"] >= 0 else "🔴"
     arrow_15m = "🟢" if candle["change_pct"] >= 0 else "🔴"
@@ -216,7 +283,7 @@ def build_message(stats: dict, candle: dict, signal: dict, hodl: dict, hodl_new:
         f"\n"
         f"{build_signal_section(signal)}\n"
         f"\n"
-        f"{build_hodl_section(hodl, stats['price'], hodl_new)}\n"
+        f"{build_trade_section(trade_state, stats['price'])}\n"
         f"\n"
         f"As of {now}"
     )
@@ -224,11 +291,14 @@ def build_message(stats: dict, candle: dict, signal: dict, hodl: dict, hodl_new:
 
 def send_one():
     stats = fetch_price_stats(SYMBOL)
-    closed = fetch_15m_klines(SYMBOL)
+    closed = fetch_15m_klines(SYMBOL, limit=300)
     candle = candle_detail(closed)
     signal = ema_signal(closed)
-    hodl, hodl_new = load_or_init_hodl(stats["price"])
-    msg = build_message(stats, candle, signal, hodl, hodl_new)
+    crossovers = find_crossovers(closed)
+    trade_state, is_new = load_or_init_trade_state(crossovers)
+    if process_crossovers(trade_state, crossovers) or is_new:
+        save_trade_state(trade_state)
+    msg = build_message(stats, candle, signal, trade_state)
     print(msg)
     send_telegram(msg)
 
