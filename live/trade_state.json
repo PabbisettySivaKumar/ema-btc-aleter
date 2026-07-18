@@ -1,14 +1,14 @@
 {
   "started_ist": "2026-07-09 13:50 IST",
-  "balance": 957.6709507975622,
-  "in_position": true,
-  "entry_price": 63988.44,
-  "entry_time_ist": "18 Jul 12:00 IST",
-  "btc": 0.014951345584401879,
-  "cost_basis": 957.6709507975622,
-  "last_crossover_ts": 1784355300000,
-  "num_trades": 23,
+  "balance": 955.0605305953889,
+  "in_position": false,
+  "entry_price": null,
+  "entry_time_ist": null,
+  "btc": 0.0,
+  "cost_basis": 0.0,
+  "last_crossover_ts": 1784366100000,
+  "num_trades": 24,
   "wins": 3,
-  "last_trade_pct": -0.3424652465781386,
-  "last_exit_ist": "18 Jul 10:45 IST"
+  "last_trade_pct": -0.27258007565118536,
+  "last_exit_ist": "18 Jul 15:00 IST"
 }
