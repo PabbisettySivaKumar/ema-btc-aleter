@@ -6,13 +6,21 @@ on:
   # throttled/dropped ~80% of runs — so we drive the cadence externally.
   workflow_dispatch:   # manual trigger + external cron-job.org trigger
 
+# cancel-in-progress: true so a new 15-min trigger supersedes any earlier run
+# that is still queued/running. Previously this was false, which meant a single
+# run stuck in "queued" (a transient GitHub runner hiccup) held the group
+# forever and every later run queued behind it got cancelled — a one-off hiccup
+# turned into a multi-hour outage. With true, the newest trigger always wins.
 concurrency:
   group: alerter
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   poll:
     runs-on: ubuntu-latest
+    # Hard ceiling so a hung step can never linger and block later runs.
+    # A normal cycle finishes in well under a minute.
+    timeout-minutes: 8
     permissions:
       contents: write   # allow committing the signal-portfolio state back on each crossover
 
