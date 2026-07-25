@@ -54,6 +54,30 @@ START_CAPITAL_USD = 1000.0
 BINANCE_FEE_PCT = 0.1     # Binance India spot fee — charged on BOTH the buy and the sell
 TRADE_STATE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "trade_state.json")
 
+# --- Dead-man's switch (external heartbeat) ---
+# A DEAD-MAN'S SWITCH must live OUTSIDE the thing it monitors: the failure we
+# guard against is this whole workflow not running (stuck/cancelled runners),
+# in which case nothing inside GitHub Actions can warn us. So we ping an
+# external uptime monitor (healthchecks.io) at the end of every good cycle.
+# If the pings stop arriving, that monitor alerts YOU after its grace period.
+# Leave HEARTBEAT_URL unset to disable (e.g. local runs); the alerter is
+# unaffected either way.
+HEARTBEAT_URL = os.environ.get("HEARTBEAT_URL", "")
+
+
+def ping_heartbeat(success: bool = True):
+    """Ping the external dead-man's switch. success=True hits the base URL;
+    success=False hits the `/fail` endpoint so the monitor alerts immediately
+    instead of waiting out the grace period. Never raises — a heartbeat problem
+    must not take down the alert cycle."""
+    if not HEARTBEAT_URL:
+        return
+    url = HEARTBEAT_URL if success else HEARTBEAT_URL.rstrip("/") + "/fail"
+    try:
+        requests.get(url, timeout=10)
+    except requests.RequestException as e:
+        print(f"heartbeat ping failed (non-fatal): {e}")
+
 
 def fetch_price_stats(symbol: str) -> dict:
     """Current price + 24h change for `symbol` from the global Binance mirror."""
@@ -320,15 +344,26 @@ def main():
     args = parser.parse_args()
 
     if args.once:
-        send_one()
+        # Single-shot mode (GitHub Actions). Ping the dead-man's switch only on
+        # a fully successful cycle; on failure ping /fail and re-raise so the
+        # job goes red AND the external monitor is notified promptly.
+        try:
+            send_one()
+        except Exception as e:
+            print(f"error: {e}")
+            ping_heartbeat(success=False)
+            raise
+        ping_heartbeat(success=True)
         return
 
     print(f"Price alerter started for {SYMBOL} — pinging every 15 min.")
     while True:
         try:
             send_one()
+            ping_heartbeat(success=True)
         except Exception as e:
             print(f"error: {e}")
+            ping_heartbeat(success=False)
         sleep_until_next_slot()
 
 

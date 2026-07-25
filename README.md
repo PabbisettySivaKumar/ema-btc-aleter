@@ -86,6 +86,26 @@ once per candle close (every 15 minutes by default). Before running, set
 the position-sizing and cost-sanity check in the alert reflect your actual
 account, not a placeholder number.
 
+## Dead-man's switch (alerts you if the alerter itself dies)
+
+The alerter runs on GitHub Actions triggered by cron-job.org. If that pipeline
+silently stops (stuck/cancelled runners — it has happened), you'd get *no*
+alerts and *no* warning. A dead-man's switch fixes that by living **outside**
+GitHub: the alerter pings an external monitor every good cycle, and the monitor
+alerts you when the pings stop.
+
+Setup (~2 min, free):
+1. Create a check at https://healthchecks.io — set **Period = 15 min**,
+   **Grace = 10 min**, and add your notification channel (email / Telegram / etc.).
+2. Copy the check's ping URL (looks like `https://hc-ping.com/<uuid>`).
+3. Add it as a GitHub Actions **secret** named `HEARTBEAT_URL`
+   (repo → Settings → Secrets and variables → Actions → New repository secret).
+   For local runs, put it in `.env` instead.
+
+That's it. On every successful cycle `price_alert.py` pings the URL; on a failed
+cycle it pings `<url>/fail`. If ~25 min pass with no ping, healthchecks.io
+notifies you. Leave `HEARTBEAT_URL` unset to disable — the alerter runs the same.
+
 ## Notifier setup (for later, not needed for backtesting)
 See comments at the top of `alerts/notifier.py` for Telegram bot token /
 chat ID setup, and Twilio WhatsApp sandbox setup.

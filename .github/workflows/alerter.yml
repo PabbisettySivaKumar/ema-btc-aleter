@@ -44,6 +44,9 @@ jobs:
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID:   ${{ secrets.TELEGRAM_CHAT_ID }}
+          # Dead-man's switch: base ping URL of a healthchecks.io check.
+          # If unset, the heartbeat is silently skipped (alerter still runs).
+          HEARTBEAT_URL:      ${{ secrets.HEARTBEAT_URL }}
         run: python live/price_alert.py --once
 
       - name: Persist signal-portfolio state (on init / each crossover)
